@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Run the legacy RPython translator after lowering match/case source.
+
+Usage:
+    rpython-match [--python2 /path/to/python2.7] target.py [translator options]
+"""
+from __future__ import print_function
+
+import argparse
+import os
+import subprocess
+import sys
+import tempfile
+
+# Make the checkout importable when this script is run directly.
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
+sys.path.insert(0, ROOT)
+
+from rpython.tool.patternmatching import transform_source
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--python2', default='python2.7',
+                        help='Python 2.7/PyPy2 executable (default: python2.7)')
+    parser.add_argument('target', help='RPython target source file')
+    parser.add_argument('translator_args', nargs=argparse.REMAINDER,
+                        help='options passed to rpython/bin/rpython')
+    args = parser.parse_args(argv)
+
+    target = os.path.realpath(args.target)
+    with open(target, 'r') as source_file:
+        lowered = transform_source(source_file.read())
+
+    target_dir = os.path.dirname(target)
+    fd, lowered_path = tempfile.mkstemp(prefix='.rpython-match-',
+                                        suffix='.py', dir=target_dir,
+                                        text=True)
+    try:
+        with os.fdopen(fd, 'w') as lowered_file:
+            lowered_file.write(lowered)
+        translator = os.path.join(ROOT, 'rpython', 'bin', 'rpython')
+        command = [args.python2, translator, lowered_path]
+        command.extend(args.translator_args)
+        return subprocess.call(command, cwd=target_dir)
+    finally:
+        try:
+            os.unlink(lowered_path)
+        except OSError:
+            pass
+
+
+if __name__ == '__main__':
+    sys.exit(main())

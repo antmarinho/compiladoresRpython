@@ -1,0 +1,238 @@
+name: Rpython Unit Tests
+# === Implementation notes ===
+# Since the test suite is too large to run in a reasonable amount of time
+# we split this into tests by sub-folder within the rpython folder
+
+# Note: this action will only run if there are changes to one of:
+#  - rpython folder
+#  - this workflow file
+#  - pytest.py
+# add more items to `paths` if we missed some!
+
+on:
+  push:
+    branches: [ "main", "py3.[0-9]+" ]
+    paths:
+        - "rpython/**/*"
+        - "pytest.py"
+        - ".github/workflows/rpython-unit-tests.yml"
+  pull_request:
+    branches: [ "main", "py3.[0-9]+" ]
+    paths:
+      - "rpython/**/*"
+      - "pytest.py"
+      - ".github/workflows/rpython-unit-tests.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.suite }} (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [misc, rlib, translator, jit-arch, jit-other]
+        platform: [linux64, linux32, arm64, macos-x86_64, macos-arm64, win64]
+        include:
+          - platform: linux64
+            runner: ubuntu-24.04
+            # latest as of 2026-09-22, pypy-ci 50c29d65 (pypy 8.0.0)
+            container: ghcr.io/pypy/buildworker_x86_64@sha256:c1838412cc6cd01472fd64614dc45b4ba1eea6f21df0a5d0824cdca07cd44a54
+            arch: x86
+          - platform: linux32
+            runner: ubuntu-24.04
+            # latest as of 2026-09-22, pypy-ci 50c29d65 (pypy 8.0.0)
+            container: ghcr.io/pypy/buildworker_i686@sha256:d52f49ee206bf62401c2db796666660ad5b94388baf392827a4bfc47ee8312c0
+            arch: x86
+          - platform: arm64
+            runner: ubuntu-24.04-arm
+            # latest as of 2026-09-22, pypy-ci 50c29d65 (pypy 8.0.0)
+            container: ghcr.io/pypy/buildworker_aarch64@sha256:8cf86ab26b3eaf4c0cdfd6bfd462511c47be7469ad5e76e5d55b4131eb4e8048
+            arch: arm64
+          - platform: macos-x86_64
+            runner: macos-15-intel
+            arch: x86
+            localbase: /usr/local
+            # translator/c/test/test_backendoptimized.py took 939 to 1759+ s here
+            test_timeout: 3613
+          - platform: macos-arm64
+            runner: macos-latest
+            arch: arm64
+            localbase: /opt/homebrew
+            test_timeout: 3613
+          - platform: win64
+            runner: windows-latest
+            arch: win64
+            # MSVC compile-per-test files take ~5x longer than on linux
+            test_timeout: 3613
+
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+    - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      if: ${{ !matrix.container }}
+      with:
+        python-version: "pypy2.7-8.0.0"
+    - name: Install test dependencies
+      if: ${{ !matrix.container }}
+      run: pypy -m pip install hypothesis==4.39.3
+    - name: Install macOS dependencies
+      if: ${{ startsWith(matrix.runner, 'macos') }}
+      run: |
+        brew untap aws/tap || true
+        brew install bdw-gc binutils gettext
+        pypy -m pip install vmprof
+        echo "DYLD_LIBRARY_PATH=$(brew --prefix gettext)/lib" >> "$GITHUB_ENV"
+
+    - name: Install Windows dependencies
+      if: ${{ matrix.platform == 'win64' }}
+      env:
+        PYTHONPATH: .
+      run: pypy get_externals.py
+    - name: Exclude the workspace from Windows Defender
+      if: ${{ matrix.platform == 'win64' }}
+      # real-time scanning of every freshly linked test exe slows the
+      # compile-heavy suites down a lot on hosted runners
+      shell: pwsh
+      run: |
+        Add-MpPreference -ExclusionPath $env:GITHUB_WORKSPACE
+        Add-MpPreference -ExclusionPath $env:RUNNER_TEMP
+        Add-MpPreference -ExclusionPath $env:TEMP
+    - name: Create machine config
+      shell: bash
+      # hosted runners differ (macos arm64 has 3 vCPUs, the rest 4), so
+      # size the parallelism to the machine instead of hardcoding it
+      run: |
+        ncpu=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo "${NUMBER_OF_PROCESSORS:-4}")
+        echo "parallel_runs=$ncpu" > machine_cfg.py
+        cat machine_cfg.py
+    - name: Run tests
+      env:
+        SUITE: ${{ matrix.suite }}
+        ARCH: ${{ matrix.arch }}
+        CONTAINER: ${{ matrix.container }}
+        PYTHONPATH: .
+        PYPY_LOCALBASE: ${{ matrix.localbase }}
+        TEST_TIMEOUT: ${{ matrix.test_timeout || 1759 }}
+        PYPY_SIGTERM_DUMP_DIR: ${{ github.workspace }}/sigterm-dumps
+      shell: bash
+      run: |
+        set -o pipefail
+        case "$SUITE" in
+          rlib)
+            PYPYCHERRYPICK="rlib" ;;
+          translator)
+            PYPYCHERRYPICK="translator" ;;
+          misc)
+            case "$ARCH" in
+              win64) PYPYCHERRYPICK="annotator:config:flowspace:tool:memory" ;;
+              *)     PYPYCHERRYPICK="annotator:config:flowspace:tool:rtyper:memory" ;;
+            esac ;;
+          jit-arch)
+            case "$ARCH" in
+              arm64) PYPYCHERRYPICK="jit/backend/aarch64" ;;
+              *)     PYPYCHERRYPICK="jit/backend/x86" ;;
+            esac ;;
+          jit-other)
+            case "$ARCH" in
+              arm64) PYPYCHERRYPICK="jit/metainterp:jit/codewriter:jit/tl:jit/tool:jit/backend/x86:jit/backend/arm:jit/backend/llgraph:jit/backend/llsupport:jit/backend/ppc:jit/backend/riscv:jit/backend/test:jit/backend/tool:jit/backend/zarch" ;;
+              *)     PYPYCHERRYPICK="jit/metainterp:jit/codewriter:jit/tl:jit/tool:jit/backend/aarch64:jit/backend/arm:jit/backend/llgraph:jit/backend/llsupport:jit/backend/ppc:jit/backend/riscv:jit/backend/test:jit/backend/tool:jit/backend/zarch" ;;
+            esac ;;
+        esac
+        export PYPYCHERRYPICK
+        if [ -n "$CONTAINER" ]; then
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -w /workspace \
+            -e PYPYCHERRYPICK \
+            -e PYTHONPATH \
+            -e PYPY_SIGTERM_DUMP_DIR=/workspace/sigterm-dumps \
+            -e GC_MARKERS=1 \
+            "$CONTAINER" \
+            pypy testrunner/runner.py \
+              --config=pypy/testrunner_cfg.py \
+              --config=machine_cfg.py \
+              --root=rpython \
+              --timeout=$TEST_TIMEOUT \
+              --logfile=testrun.log \
+            2>&1 | tee testrun-output.log
+        else
+          pypy testrunner/runner.py \
+            --config=pypy/testrunner_cfg.py \
+            --config=machine_cfg.py \
+            --root=rpython \
+            --timeout=$TEST_TIMEOUT \
+            --logfile=testrun.log \
+          2>&1 | tee testrun-output.log
+        fi
+    - name: Report per-file times and timeouts
+      if: ${{ always() }}
+      env:
+        TEST_TIMEOUT: ${{ matrix.test_timeout || 1759 }}
+      shell: bash
+      # annotates the run with files the runner killed or that are close
+      # to the per-file timeout, and puts the slowest files in the summary
+      run: |
+        limit="${TEST_TIMEOUT:-1759}"
+        warn=$(( limit * 3 / 4 ))
+        [ -f testrun-output.log ] || { echo "no testrun-output.log"; exit 0; }
+        {
+          # per-file wall time from the pytest summary line of each section
+          awk '
+            match($0, /__ [^ ]+ \[[0-9]+ done in total/) {
+              sec = substr($0, RSTART + 3, RLENGTH - 3); sub(/ \[.*/, "", sec)
+            }
+            / in [0-9.]+ seconds/ && /(passed|failed|error|skipped|xfailed)/ {
+              match($0, /in [0-9.]+ seconds/)
+              printf "%d ok %s\n", substr($0, RSTART + 3, RLENGTH - 11), sec
+            }
+          ' testrun-output.log
+          # files the runner killed: "! <file>" followed by " TIMEOUT" in the resultlog
+          [ -f testrun.log ] && awk -v limit="$limit" '
+            /^! / { f = $2; getline; if ($1 == "TIMEOUT") printf "%d TIMEOUT %s\n", limit, f }
+          ' testrun.log
+        } | sort -rn > file-times.txt
+        {
+          echo "### Per-file test time (timeout ${limit}s, warning above ${warn}s)"
+          echo
+          echo "| seconds | file | note |"
+          echo "|---:|---|---|"
+          head -15 file-times.txt | while read secs status file; do
+            if [ "$status" = TIMEOUT ]; then
+              echo "| $secs | $file | TIMED OUT, killed by the runner |"
+              echo "::error title=test file hit the ${limit}s timeout::$file was killed after ${limit}s" >&2
+            elif [ "$secs" -ge "$warn" ]; then
+              echo "| $secs | $file | above ${warn}s, close to the timeout |"
+              echo "::warning title=test file close to the timeout::$file took ${secs}s of the ${limit}s limit" >&2
+            else
+              echo "| $secs | $file | |"
+            fi
+          done
+        } > file-times.md
+        cat file-times.md
+        [ -n "$GITHUB_STEP_SUMMARY" ] && cat file-times.md >> "$GITHUB_STEP_SUMMARY"
+        # stack dumps written by rpython/conftest.py when the runner SIGTERMed a hung test file
+        for dump in sigterm-dumps/*.log; do
+          [ -f "$dump" ] || continue
+          echo "::group::stack dump of the killed test process ($dump)"
+          cat "$dump"
+          echo "::endgroup::"
+        done
+        true
+    - name: Upload test logs
+      if: ${{ always() }}
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: ${{ matrix.suite }}-testrun-log-${{ matrix.platform }}
+        path: |
+          testrun.log
+          testrun-output.log
+          file-times.md
+          sigterm-dumps/
