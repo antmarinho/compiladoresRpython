@@ -498,7 +498,7 @@ OK
 Para visualizar o código convertido:
 
 ```powershell
-python -c "from rpython.tool.patternmatching import transform_source; print(transform_source(open('target_exemplo.py').read()))"
+python -c "from rpython.tool.patternmatching import transform_source; print(transform_source(open('exemplos\exemplo.py').read()))"
 ```
 
 O resultado deve mostrar `if`, `elif`, `else`, `or` e `is` no lugar de `match` e `case`.
@@ -518,7 +518,7 @@ Se essa mensagem aparecer, o parser funcionou, mas falta o compilador C no ambie
 Com um compilador Windows compatível instalado e disponível no `PATH`, execute no terminal do VS Code:
 
 ```powershell
-python rpython\bin\rpython-match --python2 C:\pypy2.7\pypy.exe target_exemplo.py
+python rpython\bin\rpython-match --python2 C:\pypy2.7\pypy.exe exemplos\target_exemplo.py
 
 ```
 
@@ -539,7 +539,7 @@ Get-ChildItem *.exe
 O nome esperado é parecido com:
 
 ```text
-target_exemplo-c.exe
+exemplo-c.exe
 ```
 
 Execute:
@@ -571,7 +571,7 @@ python -m unittest rpython.tool.test.test_patternmatching
 Também é possível visualizar o código convertido:
 
 ```powershell
-python -c "from rpython.tool.patternmatching import transform_source; print(transform_source(open('target_exemplo.py').read()))"
+python -c "from rpython.tool.patternmatching import transform_source; print(transform_source(open('exemplos/exemplo.py').read()))"
 ```
 
 O que não será possível é gerar o executável final `.exe`, porque essa etapa exige um compilador C.
