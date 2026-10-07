@@ -518,9 +518,8 @@ Se essa mensagem aparecer, o parser funcionou, mas falta o compilador C no ambie
 Com um compilador Windows compatível instalado e disponível no `PATH`, execute no terminal do VS Code:
 
 ```powershell
-cd C:\pypy-rpython
-$env:PYTHONPATH = "C:\pypy-rpython"
 python rpython\bin\rpython-match --python2 C:\pypy2.7\pypy.exe target_exemplo.py
+
 ```
 
 Se o caminho do PyPy for diferente, substitua:

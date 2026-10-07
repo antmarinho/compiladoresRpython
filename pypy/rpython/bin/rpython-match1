@@ -33,10 +33,7 @@ def main(argv=None):
         lowered = transform_source(source_file.read())
 
     target_dir = os.path.dirname(target)
-    # The legacy RPython translator imports the target by module name.  A
-    # leading dot makes the temporary basename invalid and results in
-    # ``ImportError: No module named`` on Windows.
-    fd, lowered_path = tempfile.mkstemp(prefix='rpython_match_',
+    fd, lowered_path = tempfile.mkstemp(prefix='.rpython-match-',
                                         suffix='.py', dir=target_dir,
                                         text=True)
     try:
